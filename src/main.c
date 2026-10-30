@@ -49,6 +49,11 @@ typedef enum {
 } Algorithm;
 
 typedef enum {
+    MAZE_RECURSIVE_DIVISION,
+    MAZE_RANDOMIZED_PRIMS,
+} MazeAlgorithm;
+
+typedef enum {
     SEARCH_IDLE,
     SEARCH_RUNNING,
     SEARCH_FOUND,
@@ -62,27 +67,45 @@ typedef enum {
     DRAG_STATE_GOAL_NODE,
 } DragState;
 
+typedef enum {
+    PRIMS_CELL,
+    PRIMS_WALL,
+    PRIMS_PILLAR,
+} PrimsNodeType;
+
 static const char* algorithm_names[] = {
     "Dijkstra", "A*"
 };
 
-static Algorithm    current_algorithm = ALGORITHM_DIJKSTRA;
-static Node         nodes[NODE_COUNT];
-static HeapEntry    min_heap[HEAP_CAPACITY];
-static int          min_heap_size = 0;
-static int          insertion_counter = 0;
-static int          start_node_index = 0;
-static int          goal_node_index = NODE_COUNT - 1;
-static int          queued_node_count = 0;
-static int          path_node_indexes[NODE_COUNT];
-static int          path_length = 0;
-static int          path_revealed_count;
-static SearchState  search_state = SEARCH_IDLE;
-static bool         is_paused = false;
-static int          steps_per_frame = 4;
-static int          paint_buffer[NODE_COUNT];
-static int          paint_buffer_size = 0;
-static int          paint_buffer_index = 0;
+static const char* maze_algorithm_names[] = {
+    "Recursive division", "Randomized Prim's algorithm"
+};
+
+static Algorithm     current_algorithm = ALGORITHM_DIJKSTRA;
+static MazeAlgorithm current_maze_algorithm = MAZE_RECURSIVE_DIVISION;
+static Node          nodes[NODE_COUNT];
+static HeapEntry     min_heap[HEAP_CAPACITY];
+static int           min_heap_size = 0;
+static int           insertion_counter = 0;
+static int           start_node_index = 0;
+static int           goal_node_index = NODE_COUNT - 1;
+static int           queued_node_count = 0;
+static int           path_node_indexes[NODE_COUNT];
+static int           path_length = 0;
+static int           path_revealed_count;
+static SearchState   search_state = SEARCH_IDLE;
+static bool          is_paused = false;
+static int           steps_per_frame = 4;
+static int           paint_buffer[NODE_COUNT];
+static int           paint_buffer_size = 0;
+static int           paint_buffer_index = 0;
+static bool          is_in_cell_buffer[NODE_COUNT];
+
+static const int    cell_column_offsets[4]     = {  0, 2, 0,-2 };
+static const int    cell_row_offsets[4]        = { -2, 0, 2, 0 };
+
+static const int    cardinal_column_offsets[4] = {  0, 1, 0,-1 };
+static const int    cardinal_row_offsets[4]    = { -1, 0, 1, 0 };
 
 static int node_index(int col, int row) {
     return row * GRID_COLUMNS + col;
@@ -94,6 +117,10 @@ static int node_column(int node_index) {
 
 static int node_row(int node_index) {
     return node_index / GRID_COLUMNS;
+}
+
+static bool is_out_of_bounds(int column, int row) {
+    return column < 0 || column >= GRID_COLUMNS || row < 0 || row >= GRID_ROWS;
 }
 
 static int manhattan_distance_to_goal(int node_index) {
@@ -189,9 +216,6 @@ static void find_path(bool step_once) {
         return;
     }
 
-    static const int column_offsets[4] = {  0, 1, 0,-1 };
-    static const int row_offsets[4]    = { -1, 0, 1, 0 };
-
     while (min_heap_size > 0) {
         HeapEntry entry = min_heap_pop();
         Node* current_node = &nodes[entry.node_index];
@@ -213,8 +237,8 @@ static void find_path(bool step_once) {
         int row = node_row(entry.node_index);
 
         for (int direction = 0; direction < 4; direction++) {
-            int neighbor_column = column + column_offsets[direction];
-            int neighbor_row = row + row_offsets[direction];
+            int neighbor_column = column + cardinal_column_offsets[direction];
+            int neighbor_row = row + cardinal_row_offsets[direction];
 
             if (neighbor_column < 0 || neighbor_column >= GRID_COLUMNS) {
                 continue;
@@ -292,7 +316,7 @@ static void clear_grid(void) {
 }
 
 int get_random_num(int from, int to) {
-    return ((rand() % (to)) + from);
+    return from + rand() % (to - from + 1);
 }
 
 bool get_is_horizontal(int width, int height) {
@@ -305,6 +329,173 @@ bool get_is_horizontal(int width, int height) {
     }
 
     return rand() % 2;
+}
+
+static void fill_nodes_with_walls(void) {
+    for (int i = 0; i < NODE_COUNT; i++) {
+        nodes[i].is_wall = true;
+    }
+}
+
+static bool is_prims_cell(int index) {
+    bool column_is_odd = node_column(index) % 2;
+    bool row_is_odd = node_row(index) % 2;
+
+    return !column_is_odd && !row_is_odd;
+}
+
+int get_random_nearest_prims_cell_index(int index) {
+    static const int column_offsets[8] = {  0, 1, 0,-1, 1, 1,-1,-1 };
+    static const int row_offsets[8]    = { -1, 0, 1, 0,-1, 1, 1,-1 };
+
+    int column = node_column(index);
+    int row = node_row(index);
+
+    int cells[4];
+    int cells_size = 0;
+
+    for (int i = 0; i < 8; i++) {
+        int current_column = column + column_offsets[i];
+        int current_row = row + row_offsets[i];
+
+        if (is_out_of_bounds(current_column, current_row)) {
+            continue;
+        }
+
+        int current_index = node_index(current_column, current_row);
+        bool is_cell = is_prims_cell(current_index);
+
+        if (is_cell) {
+            cells[cells_size++] = current_index;
+        }
+    }
+
+    return cells[get_random_num(0, cells_size - 1)];
+}
+
+static void add_walled_neighbors_to_cell_buffer(int cell_node_index, int* cell_buffer, int* cell_buffer_size) {
+    int column = node_column(cell_node_index);
+    int row = node_row(cell_node_index);
+
+    for (int i = 0; i < 4; i++) {
+        int neighbor_column = column + cell_column_offsets[i];
+        int neighbor_row = row + cell_row_offsets[i];
+
+        if (is_out_of_bounds(neighbor_column, neighbor_row)) {
+            continue;
+        }
+
+        int neighbor_index = node_index(neighbor_column, neighbor_row);
+
+        if (is_in_cell_buffer[neighbor_index] || !nodes[neighbor_index].is_wall) {
+            continue;
+        }
+
+        is_in_cell_buffer[neighbor_index] = true;
+        cell_buffer[(*cell_buffer_size)++] = neighbor_index;
+    }
+}
+
+static void connect_node_to_maze(int index) {
+    nodes[index].is_wall = false;
+    paint_buffer[paint_buffer_size++] = index;
+
+    int column = node_column(index);
+    int row = node_row(index);
+
+    int walled_neighbors[4];
+    int walled_neighbor_size = 0;
+
+    for (int i = 0; i < 4; i++) {
+        int neighbor_column = column + cardinal_column_offsets[i];
+        int neighbor_row = row + cardinal_row_offsets[i];
+
+        if (is_out_of_bounds(neighbor_column, neighbor_row)) {
+            continue;
+        }
+
+        int neighbor_index = node_index(neighbor_column, neighbor_row);
+
+        if (!nodes[neighbor_index].is_wall) {
+            return;
+        }
+
+        walled_neighbors[walled_neighbor_size++] = neighbor_index;
+    }
+
+    int random_neighbor_index = walled_neighbors[get_random_num(0, walled_neighbor_size - 1)];
+    nodes[random_neighbor_index].is_wall = false;
+    paint_buffer[paint_buffer_size++] = random_neighbor_index;
+}
+
+static int get_random_maze_neighbor_index(int cell_node_index) {
+    int column = node_column(cell_node_index);
+    int row = node_row(cell_node_index);
+
+    int maze_neighbors[4];
+    int maze_neighbor_size = 0;
+
+    for (int i = 0; i < 4; i++) {
+        int neighbor_column = column + cell_column_offsets[i];
+        int neighbor_row = row + cell_row_offsets[i];
+
+        if (is_out_of_bounds(neighbor_column, neighbor_row)) {
+            continue;
+        }
+
+        int neighbor_index = node_index(neighbor_column, neighbor_row);
+
+        if (!nodes[neighbor_index].is_wall) {
+            maze_neighbors[maze_neighbor_size++] = neighbor_index;
+        }
+    }
+
+    return maze_neighbors[get_random_num(0, maze_neighbor_size - 1)];
+}
+
+static void randomized_prims_maze(){
+    fill_nodes_with_walls();
+    for (int i = 0; i < NODE_COUNT; i++) {
+        is_in_cell_buffer[i] = 0;
+    }
+
+    int cells[NODE_COUNT];
+    int cell_buffer_size = 0;
+
+    int current_cell_index;
+    if (is_prims_cell(start_node_index)) {
+        current_cell_index = start_node_index;
+    } else {
+        current_cell_index = get_random_nearest_prims_cell_index(start_node_index);
+    }
+
+    nodes[current_cell_index].is_wall = false;
+    paint_buffer[paint_buffer_size++] = current_cell_index;
+    add_walled_neighbors_to_cell_buffer(current_cell_index, cells, &cell_buffer_size);
+
+    while (cell_buffer_size > 0) {
+        int cell_index = get_random_num(0, cell_buffer_size - 1);
+        int cell_node_index = cells[cell_index];
+        cells[cell_index] = cells[--cell_buffer_size];
+
+        int maze_neighbor_index = get_random_maze_neighbor_index(cell_node_index);
+
+        int dividing_wall_column = (node_column(cell_node_index) + node_column(maze_neighbor_index)) / 2;
+        int dividing_wall_row = (node_row(cell_node_index) + node_row(maze_neighbor_index)) / 2;
+
+        nodes[node_index(dividing_wall_column, dividing_wall_row)].is_wall = false;
+        nodes[cell_node_index].is_wall = false;
+
+        paint_buffer[paint_buffer_size++] = node_index(dividing_wall_column, dividing_wall_row);
+        paint_buffer[paint_buffer_size++] = cell_node_index;
+
+        add_walled_neighbors_to_cell_buffer(cell_node_index, cells, &cell_buffer_size);
+    }
+
+    connect_node_to_maze(start_node_index);
+    connect_node_to_maze(goal_node_index);
+
+    fill_nodes_with_walls();
 }
 
 static void recursive_division_maze(int column, int row, int width, int height, bool is_horizontal) {
@@ -447,10 +638,10 @@ static void draw_panel(void) {
     if (search_state == SEARCH_NO_PATH) {
         state_text_index = 4;
     }
-
     DrawText(TextFormat(
-        "%-8s  |  %-10s  |  searched: %5d  |  queue: %d  |  speed: %d/frame",
+        "Search algorithm: %s  |  Maze algorithm: %s  |  %s  |  searched: %d  |  queue: %d  |  speed: %d/frame",
         algorithm_names[current_algorithm],
+        maze_algorithm_names[current_maze_algorithm],
         state_texts[state_text_index],
         queued_node_count,
         min_heap_size,
@@ -510,12 +701,18 @@ static void paint_wall_line(int start_column, int start_row, int end_column, int
 
 static void generate_maze(void) {
     clear_grid();
-    recursive_division_maze(0, 0, GRID_COLUMNS, GRID_ROWS, get_is_horizontal(GRID_COLUMNS, GRID_ROWS));
+    switch (current_maze_algorithm) {
+        case MAZE_RECURSIVE_DIVISION:
+            recursive_division_maze(0, 0, GRID_COLUMNS, GRID_ROWS, get_is_horizontal(GRID_COLUMNS, GRID_ROWS));
+            break;
+        case MAZE_RANDOMIZED_PRIMS:
+            randomized_prims_maze();
+    }
 }
 
 static void paint_maze_frame(void) {
-    nodes[paint_buffer[paint_buffer_index++]].is_wall = true;
-    if (search_state == SEARCH_FOUND) {
+    nodes[paint_buffer[paint_buffer_index++]].is_wall = current_maze_algorithm == MAZE_RECURSIVE_DIVISION;
+    if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
         instant_search_and_display_path();
     }
 }
@@ -655,20 +852,31 @@ static void handle_input(void) {
     }
 
     if (IsKeyPressed(KEY_ONE)) {
-        reset_search();
-        current_algorithm = ALGORITHM_DIJKSTRA;
+        if (is_shift_held) {
+            clear_grid();
+            current_maze_algorithm = MAZE_RECURSIVE_DIVISION;
+        } else {
+            reset_search();
+            current_algorithm = ALGORITHM_DIJKSTRA;
+        }
     }
     if (IsKeyPressed(KEY_TWO)) {
-        reset_search();
-        current_algorithm = ALGORITHM_A_STAR;
+        if (is_shift_held) {
+            clear_grid();
+            current_maze_algorithm = MAZE_RANDOMIZED_PRIMS;
+        } else {
+            reset_search();
+            current_algorithm = ALGORITHM_A_STAR;
+        }
     }
 
     if (IsKeyPressed(KEY_G)) {
-        if (search_state == SEARCH_IDLE) {
-            generate_maze();
-        } else if (search_state == SEARCH_FOUND) {
+        if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
             generate_maze();
             instant_search_and_display_path();
+        }
+        if (search_state == SEARCH_IDLE) {
+            generate_maze();
         }
     }
 
@@ -684,7 +892,7 @@ static void handle_input(void) {
 int main(void) {
     srand(time(NULL));
 
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Pathfinding visualizer using raylib");
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Pathfinding Visualizer");
 
     SetTargetFPS(TARGET_FPS);
 
@@ -698,6 +906,10 @@ int main(void) {
         }
 
         if (paint_buffer_size > 0 && paint_buffer_size > paint_buffer_index) {
+            // TODO: Draw failed search path when no path found while painting
+            // Do this by finding lowest radius n around goal node that has been searched,
+            // find lowest travel distance node in n radius square around goal node,
+            // and display path to this node in red.
             paint_maze_frame();
         }
         handle_input();

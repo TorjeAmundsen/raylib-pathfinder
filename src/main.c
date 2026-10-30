@@ -19,13 +19,14 @@
 #define HEAP_CAPACITY   (NODE_COUNT * 4 + 1)
 #define TARGET_FPS      60
 
-#define DEFAULT_NODE_COLOR  ((Color){  40,  45,  55, 255 })
-#define START_NODE_COLOR    ((Color){  40, 200,  60, 255 })
-#define GOAL_NODE_COLOR     ((Color){ 130,  80, 240, 255 })
-#define WALL_NODE_COLOR     ((Color){   0,   0,   0, 255 })
-#define QUEUED_NODE_COLOR   ((Color){ 255, 215,  80, 255 })
-#define PATH_LINE_COLOR     ((Color){ 255, 255,   0, 255 })
-#define PATH_LINE_THICKNESS 6.0f
+#define DEFAULT_NODE_COLOR          ((Color){  40,  45,  55, 255 })
+#define START_NODE_COLOR            ((Color){  40, 200,  60, 255 })
+#define GOAL_NODE_COLOR             ((Color){ 130,  80, 240, 255 })
+#define WALL_NODE_COLOR             ((Color){   0,   0,   0, 255 })
+#define QUEUED_NODE_COLOR           ((Color){ 255, 215,  80, 255 })
+#define PATH_LINE_COLOR             ((Color){ 255, 255,   0, 255 })
+#define PATH_LINE_NOT_FOUND_COLOR   ((Color){ 185, 25,   25, 255 })
+#define PATH_LINE_THICKNESS         6.0f
 
 typedef struct {
     bool is_wall;
@@ -196,9 +197,9 @@ static HeapEntry min_heap_pop(void) {
     return best;
 }
 
-static void build_path(void) {
+static void build_path(int end_node_index) {
     path_length = 0;
-    for (int i = goal_node_index; i != -1; i = nodes[i].previous_node_index) {
+    for (int i = end_node_index; i != -1; i = nodes[i].previous_node_index) {
         path_node_indexes[path_length++] = i;
     }
 
@@ -211,8 +212,68 @@ static void build_path(void) {
     path_revealed_count = 0;
 }
 
+static void consider_closest_candidate(int column, int row, int* best_index) {
+    if (is_out_of_bounds(column, row)) {
+        return;
+    }
+
+    int index = node_index(column, row);
+    if (!nodes[index].is_finalized) {
+        return;
+    }
+
+    if (*best_index == -1) {
+        *best_index = index;
+        return;
+    }
+
+    int candidate_distance = nodes[index].distance_from_start;
+    int best_distance = nodes[*best_index].distance_from_start;
+
+    if (candidate_distance < best_distance ||
+        (candidate_distance == best_distance &&
+        manhattan_distance_to_goal(index) < manhattan_distance_to_goal(*best_index))) {
+            *best_index = index;
+    }
+}
+
+static int find_closest_searched_node_to_goal(void) {
+    int goal_column = node_column(goal_node_index);
+    int goal_row = node_row(goal_node_index);
+
+    int max_radius = goal_column;
+    if (goal_row > max_radius) {
+        max_radius = goal_row;
+    }
+    if (GRID_COLUMNS - 1 - goal_column > max_radius) {
+        max_radius = GRID_COLUMNS - 1 - goal_column;
+    }
+    if (GRID_ROWS - 1 - goal_row > max_radius) {
+        max_radius = GRID_ROWS - 1 - goal_row;
+    }
+
+    for (int radius = 1; radius <= max_radius; radius++) {
+        int best_index = -1;
+        for (int offset = -radius; offset <= radius; offset++) {
+            consider_closest_candidate(goal_column + offset, goal_row - radius, &best_index);
+            consider_closest_candidate(goal_column + offset, goal_row + radius, &best_index);
+        }
+
+        for (int offset = -radius + 1; offset <= radius - 1; offset++) {
+            consider_closest_candidate(goal_column - radius, goal_row + offset, &best_index);
+            consider_closest_candidate(goal_column + radius, goal_row + offset, &best_index);
+        }
+
+        if (best_index != -1) {
+            return best_index;
+        }
+    }
+
+    return -1;
+}
+
 static void find_path(bool step_once) {
-    if (search_state == SEARCH_FOUND) {
+    if (search_state != SEARCH_RUNNING) {
         return;
     }
 
@@ -228,7 +289,7 @@ static void find_path(bool step_once) {
         queued_node_count++;
 
         if (entry.node_index == goal_node_index) {
-            build_path();
+            build_path(goal_node_index);
             search_state = SEARCH_FOUND;
             return;
         }
@@ -267,6 +328,11 @@ static void find_path(bool step_once) {
 
                 min_heap_push(neighbor_index, priority, heuristic);
             }
+        }
+
+        int closest_index = find_closest_searched_node_to_goal();
+        if (closest_index != -1) {
+            build_path(closest_index);
         }
 
         if (step_once) {
@@ -609,12 +675,16 @@ static void draw_grid_nodes(void) {
 }
 
 static void draw_path(void) {
+    Color color = search_state == SEARCH_FOUND ? PATH_LINE_COLOR : PATH_LINE_NOT_FOUND_COLOR;
+    if (search_state == SEARCH_NO_PATH) {
+        path_revealed_count = path_length;
+    }
     for (int i = 1; i < path_revealed_count; i++) {
         Vector2 from = get_node_center(path_node_indexes[i - 1]);
         Vector2 to = get_node_center(path_node_indexes[i]);
 
-        DrawLineEx(from, to, PATH_LINE_THICKNESS, PATH_LINE_COLOR);
-        DrawCircleV(to, PATH_LINE_THICKNESS / 2.0f, PATH_LINE_COLOR);
+        DrawLineEx(from, to, PATH_LINE_THICKNESS, color);
+        DrawCircleV(to, PATH_LINE_THICKNESS / 2.0f, color);
     }
 }
 
@@ -728,20 +798,21 @@ static void handle_input(void) {
 
     bool is_mouse_inbounds = column >= 0 && column < GRID_COLUMNS && row >= 0 && row < GRID_ROWS;
     bool is_shift_held = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    bool is_painting_maze = paint_buffer_index < paint_buffer_size;
 
     if (is_mouse_inbounds) {
         int hovered_index = node_index(column, row);
         bool is_hovering_start_or_end = hovered_index == start_node_index || hovered_index == goal_node_index;
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && search_state != SEARCH_RUNNING) {
             if (hovered_index == start_node_index) {
                 drag_state = DRAG_STATE_START_NODE;
             } else if (hovered_index == goal_node_index) {
                 drag_state = DRAG_STATE_GOAL_NODE;
-            } else {
+            } else if (!is_painting_maze) {
                 drag_state = DRAG_STATE_PAINTING_WALLS;
             }
         }
-        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && search_state != SEARCH_RUNNING) {
             if (hovered_index != start_node_index && hovered_index != goal_node_index) {
                 drag_state = DRAG_STATE_PAINTING_WALLS;
             }
@@ -756,21 +827,21 @@ static void handle_input(void) {
                         last_frame_row >= 0 ? last_frame_row : row,
                         true
                     );
-                    if (search_state == SEARCH_FOUND) {
+                    if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
                         instant_search_and_display_path();
                     }
                 }
             } else if (drag_state == DRAG_STATE_START_NODE) {
                 if (!nodes[hovered_index].is_wall && !is_hovering_start_or_end) {
                     start_node_index = hovered_index;
-                    if (search_state == SEARCH_FOUND) {
+                    if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
                         instant_search_and_display_path();
                     }
                 }
             } else if (drag_state == DRAG_STATE_GOAL_NODE) {
                 if (!nodes[hovered_index].is_wall && !is_hovering_start_or_end) {
                     goal_node_index = hovered_index;
-                    if (search_state == SEARCH_FOUND) {
+                    if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
                         instant_search_and_display_path();
                     }
                 }
@@ -785,7 +856,7 @@ static void handle_input(void) {
                         last_frame_row >= 0 ? last_frame_row : row,
                         false
                     );
-                    if (search_state == SEARCH_FOUND) {
+                    if (search_state == SEARCH_FOUND || search_state == SEARCH_NO_PATH) {
                         instant_search_and_display_path();
                     }
                 }
@@ -906,10 +977,6 @@ int main(void) {
         }
 
         if (paint_buffer_size > 0 && paint_buffer_size > paint_buffer_index) {
-            // TODO: Draw failed search path when no path found while painting
-            // Do this by finding lowest radius n around goal node that has been searched,
-            // find lowest travel distance node in n radius square around goal node,
-            // and display path to this node in red.
             paint_maze_frame();
         }
         handle_input();

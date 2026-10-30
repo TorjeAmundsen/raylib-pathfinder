@@ -80,6 +80,9 @@ static int          path_revealed_count;
 static SearchState  search_state = SEARCH_IDLE;
 static bool         is_paused = false;
 static int          steps_per_frame = 4;
+static int          paint_buffer[NODE_COUNT];
+static int          paint_buffer_size = 0;
+static int          paint_buffer_index = 0;
 
 static int node_index(int col, int row) {
     return row * GRID_COLUMNS + col;
@@ -280,6 +283,8 @@ static void begin_search(void) {
 }
 
 static void clear_grid(void) {
+    paint_buffer_size = 0;
+    paint_buffer_index = 0;
     for (int i = 0; i < NODE_COUNT; i++) {
         nodes[i].is_wall = false;
     }
@@ -324,13 +329,13 @@ static void recursive_division_maze(int column, int row, int width, int height, 
     if (is_horizontal) {
         for (int i = 0; i < wall_length; i++) {
             if (wall_column + i != hole_column) {
-                nodes[node_index(wall_column + i, wall_row)].is_wall = true;
+                paint_buffer[paint_buffer_size++] = node_index(wall_column + i, wall_row);
             }
         }
     } else {
         for (int i = 0; i < wall_length; i++) {
             if (wall_row + i != hole_row) {
-                nodes[node_index(wall_column, wall_row + i)].is_wall = true;
+                paint_buffer[paint_buffer_size++] = node_index(wall_column, wall_row + i);
             }
         }
     }
@@ -503,6 +508,18 @@ static void paint_wall_line(int start_column, int start_row, int end_column, int
     }
 }
 
+static void generate_maze(void) {
+    clear_grid();
+    recursive_division_maze(0, 0, GRID_COLUMNS, GRID_ROWS, get_is_horizontal(GRID_COLUMNS, GRID_ROWS));
+}
+
+static void paint_maze_frame(void) {
+    nodes[paint_buffer[paint_buffer_index++]].is_wall = true;
+    if (search_state == SEARCH_FOUND) {
+        instant_search_and_display_path();
+    }
+}
+
 static void handle_input(void) {
     static DragState drag_state  = DRAG_STATE_NONE;
     static int last_frame_column = -1;
@@ -583,7 +600,7 @@ static void handle_input(void) {
         drag_state = DRAG_STATE_NONE;
     }
 
-    if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) {
+    if ((IsKeyPressed(KEY_S) || IsKeyPressed(KEY_SPACE)) && !(paint_buffer_size > 0 && paint_buffer_size > paint_buffer_index)) {
         if (is_paused) {
             if (search_state == SEARCH_IDLE) {
                 begin_search();
@@ -648,11 +665,9 @@ static void handle_input(void) {
 
     if (IsKeyPressed(KEY_G)) {
         if (search_state == SEARCH_IDLE) {
-            clear_grid();
-            recursive_division_maze(0, 0, GRID_COLUMNS, GRID_ROWS, get_is_horizontal(GRID_COLUMNS, GRID_ROWS));
+            generate_maze();
         } else if (search_state == SEARCH_FOUND) {
-            clear_grid();
-            recursive_division_maze(0, 0, GRID_COLUMNS, GRID_ROWS, get_is_horizontal(GRID_COLUMNS, GRID_ROWS));
+            generate_maze();
             instant_search_and_display_path();
         }
     }
@@ -680,6 +695,10 @@ int main(void) {
 
         if (search_state == SEARCH_FOUND && path_revealed_count < path_length) {
             path_revealed_count++;
+        }
+
+        if (paint_buffer_size > 0 && paint_buffer_size > paint_buffer_index) {
+            paint_maze_frame();
         }
         handle_input();
         BeginDrawing();

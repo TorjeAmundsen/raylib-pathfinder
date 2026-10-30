@@ -21,7 +21,8 @@ Dijkstra solving a generated maze.
 | `P` | Pause / resume |
 | `Left` / `Right` | Speed -1 / +1 steps per frame (`Shift`: 4) |
 | `1` / `2` | Dijkstra / A* |
-| `G` | Generate maze |
+| `Shift` + `1` / `2` | Recursive division / randomized Prim's maze (clears grid) |
+| `G` | Generate maze (not while a search is running) |
 | `R` | Clear grid |
 | `Esc` | Quit |
 

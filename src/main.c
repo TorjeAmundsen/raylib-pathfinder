@@ -687,7 +687,7 @@ static void paint_wall_line(int start_column, int start_row, int end_column, int
 
         int error_2x = error * 2;
 
-        if (error_2x > -vertical_direction) {
+        if (error_2x > -vertical_distance) {
             error -= vertical_distance;
             start_column += horizontal_direction;
         }

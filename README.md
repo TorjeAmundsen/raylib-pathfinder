@@ -4,11 +4,11 @@ Grid pathfinding visualizer (Dijkstra and A*) written in C with raylib.
 
 Draw walls, then drag the start and goal nodes. The path updates live.
 
-![A* with hand-drawn walls](docs/raylib-pathfinder_7ozXybCBOT.gif)
+![A* with hand-drawn walls](docs/basic-wall-drawing.gif)
 
 Dijkstra solving a generated maze.
 
-![Dijkstra on a generated maze](docs/raylib-pathfinder_5WfAUWtsha.gif)
+![Dijkstra on a generated recursive division maze](docs/maze-generation.gif)
 
 ## Controls
 

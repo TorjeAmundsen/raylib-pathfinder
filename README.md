@@ -2,7 +2,7 @@
 
 Grid pathfinding visualizer (Dijkstra and A*) written in C with raylib.
 
-Draw walls, then drag the start and goal nodes. The path updates live.
+Draw walls, then drag the start and goal nodes. The path updates live. If walls block the goal, a red path leads to the closest searched node.
 
 ![A* with hand-drawn walls](docs/basic-wall-drawing.gif)
 
@@ -14,8 +14,8 @@ Dijkstra solving a generated maze.
 
 | Input | Action |
 |---|---|
-| Left mouse drag | Paint walls, or drag the start/goal node |
-| Right mouse drag | Erase walls |
+| Left mouse drag | Paint walls, or drag the start/goal node (not while a search is running) |
+| Right mouse drag | Erase walls (not while a search is running) |
 | `S` / `Space` | Start search (single step while paused) |
 | `Shift` + `S` | Step one frame's worth while paused |
 | `P` | Pause / resume |
